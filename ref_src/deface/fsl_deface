@@ -1,0 +1,314 @@
+#!/bin/bash
+
+# Authors: Fidel Alfaro Almagro, Steve Smith, Mark Jenkinson, and Tom Nichols
+# FMRIB, Oxford University
+# 01-Feb-2018
+# Version 1.0.0
+#
+#   Part of FSL - FMRIB's Software Library
+#   http://www.fmrib.ox.ac.uk/fsl
+#   fsl@fmrib.ox.ac.uk
+#
+#   Developed at FMRIB (Oxford Centre for Functional Magnetic Resonance
+#   Imaging of the Brain), Department of Clinical Neurology, Oxford
+#   University, Oxford, UK
+#
+#
+#   LICENCE
+#
+#   FMRIB Software Library, Release 6.0 (c) 2018, The University of
+#   Oxford (the "Software")
+#
+#   The Software remains the property of the Oxford University Innovation
+#   ("the University").
+#
+#   The Software is distributed "AS IS" under this Licence solely for
+#   non-commercial use in the hope that it will be useful, but in order
+#   that the University as a charitable foundation protects its assets for
+#   the benefit of its educational and research purposes, the University
+#   makes clear that no condition is made or to be implied, nor is any
+#   warranty given or to be implied, as to the accuracy of the Software,
+#   or that it will be suitable for any particular purpose or for use
+#   under any specific conditions. Furthermore, the University disclaims
+#   all responsibility for the use which is made of the Software. It
+#   further disclaims any liability for the outcomes arising from using
+#   the Software.
+#
+#   The Licensee agrees to indemnify the University and hold the
+#   University harmless from and against any and all claims, damages and
+#   liabilities asserted by third parties (including claims for
+#   negligence) which arise directly or indirectly from the use of the
+#   Software or the sale of any products based on the Software.
+#
+#   No part of the Software may be reproduced, modified, transmitted or
+#   transferred in any form or by any means, electronic or mechanical,
+#   without the express permission of the University. The permission of
+#   the University is not required if the said reproduction, modification,
+#   transmission or transference is done without financial return, the
+#   conditions of this Licence are imposed upon the receiver of the
+#   product, and all original and amended source code is included in any
+#   transmitted product. You may be held legally responsible for any
+#   copyright infringement that is caused or encouraged by your failure to
+#   abide by these terms and conditions.
+#
+#   You are not permitted under this Licence to use this Software
+#   commercially. Use for which any financial return is received shall be
+#   defined as commercial use, and includes (1) integration of all or part
+#   of the source code or the Software into a product for sale or license
+#   by or on behalf of Licensee to third parties or (2) use of the
+#   Software or any derivative of it for research with the final aim of
+#   developing software products for sale or license to a third party or
+#   (3) use of the Software or any derivative of it for research with the
+#   final aim of developing non-software products for sale or license to a
+#   third party, or (4) use of the Software to provide any service to an
+#   external organisation for which payment is received. If you are
+#   interested in using the Software commercially, please contact Oxford
+#   University Innovation ("OUI"), the technology transfer company of the
+#   University, to negotiate a licence. Contact details are:
+#   fsl@innovation.ox.ac.uk quoting Reference Project 9564, FSL.
+export LC_ALL=C
+
+export LC_ALL=C
+
+Usage() {
+    echo ""
+    echo "Usage: `basename $0` <input> <output> "
+    echo ""
+    echo "       Tool to deface a structural T1w image."
+    echo ""
+    echo "Options:"
+    echo ""
+    echo "  -k                     apply the defacing to the cropped image instead of the original image"
+    echo "  -d <defacing_mask>     filename to save the defacing mask;"
+    echo "  -n <cropped_struc>     filename to save the new cropped struct;"
+    echo "  -m13 <orig_2_std>      filename to save affine matrix from original struct to std;"
+    echo "  -m12 <orig_2_cropped>  filename to save affine matrix from original struct to cropped struct;"
+    echo "  -m23 <cropped_2_std>   filename to save affine matrix from cropped struct to std;"
+    echo "  -nud <x y z>           Shift, in mm, x-, y- and z-directions, to shift face mask by;"
+    echo "                         (These matrices will only work if the input has been previously reoriented to std)"
+    echo "  -f <f>                 fractional intensity for bet (0->1); default=0.5; "
+    echo "  -B                     Bias-correct the input image (with fast);"
+    echo "  -c <x y z>             centre-of-gravity for bet (voxels, not mm);"
+    echo "  -p <images_baseName>   generate 2 pngs to show how the defacing worked for QC purposes"
+    echo ""
+}
+
+##Check compulsory arguments
+
+if [ "$1" == "" ] ; then
+    Usage
+    echo ""
+    echo "Error: No input image."
+    echo ""
+    exit 1
+fi
+
+if [ `${FSLDIR}/bin/imtest $1` == 0 ] ; then
+    Usage
+    echo ""
+    echo "Error: input image $1 not valid"
+    echo ""
+    exit 1
+fi
+
+if [ "$2" == "" ] ; then
+    Usage
+    echo ""
+    echo "Error: No output image."
+    echo ""
+    exit 1
+fi
+
+imCompleteName="$1"
+dirInput=`dirname $1`
+imName=`basename $1`
+imBaseName=`remove_ext ${imName}`
+output="$2"
+dirOutput=`dirname $2`
+
+if [ ! -w ${dirOutput} ] ; then
+    Usage
+    echo ""
+    echo "Error: Output directory is not writable."
+    echo ""
+    exit 1
+fi
+
+if [ "${dirInput}" == "" ] ; then
+    dirInput="."
+fi
+
+
+##Check optional arguments
+
+shift 2
+
+applyCropped="0"
+bet_opts=""
+saveDefacingMask="0"
+saveCropped="0"
+saveMatrix13="0"
+saveMatrix12="0"
+saveMatrix23="0"
+savePngs="0"
+
+while [ _$1 != _ ] ; do
+    if [ $1 == -k ] ; then
+        applyCropped="1"
+        shift 1
+    elif [ $1 == -f ] ; then
+	[ "$2" == "" ] && Usage
+        bet_opts="${bet_opts} $1 $2"
+        shift 2
+    elif [ $1 == -c ] ; then
+	[ "$4" == "" ] && Usage
+        bet_opts="${bet_opts} $1 $2 $3 $4"
+        shift 4
+    elif [ $1 == -d ] ; then
+    [ "$2" == "" ] && Usage
+	    saveDefacingMask="1"
+        defacingMask="$2"
+        shift 2
+    elif [ $1 == -n ] ; then
+    [ "$2" == "" ] && Usage
+	    saveCropped="1"
+        cropped="$2"
+        shift 2
+    elif [ $1 == -m13 ] ; then
+    [ "$2" == "" ] && Usage
+	    saveMatrix13="1"
+        Matrix13="$2"
+        shift 2
+    elif [ $1 == -m12 ] ; then
+    [ "$2" == "" ] && Usage
+	    saveMatrix12="1"
+        Matrix12="$2"
+        shift 2
+    elif [ $1 == -m23 ] ; then
+    [ "$2" == "" ] && Usage
+	    saveMatrix23="1"
+        Matrix23="$2"
+        shift 2
+    elif [ $1 == -p ] ; then
+    [ "$2" == "" ] && Usage
+        savePngs="1"
+        imagesBaseName="$2"
+        shift 2
+    elif [ $1 = -B ] ; then
+        BiasCorr="1"
+        shift 1
+    elif [ $1 = -nud ] ; then
+    [ "$4" = "" ] && Usage
+        NudgeXYZ="$2 $3 $4"
+        shift 4
+    else
+	    Usage
+    fi
+done
+
+#Temporal prefix for all intermediate results.
+tmpName=`tmpnam`
+
+#### Do actual processing
+
+# Create image 1: _orig
+# Copy the original image and convert it to float
+${FSLDIR}/bin/fslmaths ${dirInput}/${imBaseName} ${tmpName}_orig
+
+# Check if the image is correctly oriented
+${FSLDIR}/bin/fslreorient2std -m ${tmpName}_reoriented_mat ${imCompleteName} ${tmpName}_reoriented
+
+diff_mat=`diff ${tmpName}_reoriented_mat ${FSLDIR}/etc/flirtsch/ID_MAT.mat`
+
+if [ ! "${diff_mat}" == "" ] ; then
+    Usage
+    echo "Error: The input image has an incorrect alignment. The defacing will not work on this image."
+    echo "       Please, run fslreorient2std ${imCompleteName} before running fsl_deface."
+    exit 1
+fi
+
+# Create image 2: _roi
+# Calculate where does the brain start
+# in the z dimension and then extract the roi
+head_top=`${FSLDIR}/bin/robustfov -i ${tmpName}_orig | grep -v Final | head -n 1 | awk '{print $5}'`
+${FSLDIR}/bin/fslmaths ${tmpName}_orig -roi 0 -1 0 -1 ${head_top} 170 0 1 ${tmpName}_roi
+
+# Bias correction (optional)
+if [ "$BiasCorr" == 1 ] ; then
+    fast -B --nopve ${tmpName}_roi
+    immv ${tmpName}_roi_restore ${tmpName}_roi
+fi
+
+# Create image 3: _roi_brain
+# Run a (Recursive) brain extraction on the roi
+${FSLDIR}/bin/bet ${tmpName}_roi ${tmpName}_roi_brain -R ${bet_opts}
+
+# Create image 4: _new
+# Reduce the FOV of T1_orig by calculating a registration
+# from roi_brain to ssref and applies it to orig
+${FSLDIR}/bin/standard_space_roi ${tmpName}_roi_brain ${tmpName}_new -maskNONE -ssref ${FSLDIR}/data/standard/MNI152_T1_1mm_brain -altinput ${tmpName}_orig -d
+
+# Generate the actual affine from the original volume to the cut
+# version we have now and combine it to have an affine matrix from orig to MNI
+${FSLDIR}/bin/flirt -in ${tmpName}_new -ref ${tmpName}_orig -omat ${tmpName}_new_to_${imBaseName}_orig.mat -schedule ${FSLDIR}/etc/flirtsch/xyztrans.sch
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_orig_to_${imBaseName}_new.mat -inverse ${tmpName}_new_to_${imBaseName}_orig.mat
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_new_to_MNI_linear.mat -concat ${tmpName}_new_tmp_to_std.mat ${tmpName}_new_to_${imBaseName}_orig.mat
+
+# Combining all generated affine matrices
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_orig_to_MNI_linear.mat -concat ${tmpName}_new_to_MNI_linear.mat ${tmpName}_orig_to_${imBaseName}_new.mat
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_orig_to_MNI_BigFoV_linear.mat -concat ${FSLDIR}/etc/flirtsch/MNI_to_MNI_BigFoV_facemask.mat ${tmpName}_orig_to_MNI_linear.mat
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_MNI_BigFoV_to_orig.mat -inverse ${tmpName}_orig_to_MNI_BigFoV_linear.mat
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_new_to_MNI_BigFoV_linear.mat -concat ${FSLDIR}/etc/flirtsch/MNI_to_MNI_BigFoV_facemask.mat ${tmpName}_new_to_MNI_linear.mat
+${FSLDIR}/bin/convert_xfm -omat ${tmpName}_MNI_BigFoV_to_new.mat -inverse ${tmpName}_new_to_MNI_BigFoV_linear.mat
+
+if [ "$NudgeXYZ" != "" ] ; then
+    tmp=( $NudgeXYZ )
+    printf "1 0 0 ${tmp[0]}\n0 1 0 ${tmp[1]}\n0 0 1 ${tmp[2]}\n0 0 0 1\n" > ${tmpName}_nudge.mat
+
+    ${FSLDIR}/bin/convert_xfm -omat ${tmpName}_MNI_BigFoV_to_new.mat  -concat ${tmpName}_MNI_BigFoV_to_new.mat   ${tmpName}_nudge.mat
+    ${FSLDIR}/bin/convert_xfm -omat ${tmpName}_MNI_BigFoV_to_orig.mat -concat ${tmpName}_MNI_BigFoV_to_orig.mat  ${tmpName}_nudge.mat
+fi
+
+if [ "$applyCropped" == "1" ] ; then
+    # Take the defacing masks from MNI_BigFoC space to original space
+    ${FSLDIR}/bin/flirt -in ${FSLDIR}/data/standard/MNI152_T1_1mm_BigFoV_facemask -ref ${tmpName}_new -out ${tmpName} -applyxfm -init ${tmpName}_MNI_BigFoV_to_new.mat
+
+    # Defacing image
+    ${FSLDIR}/bin/fslmaths ${tmpName} -binv ${tmpName}_bin
+    ${FSLDIR}/bin/fslmaths ${tmpName}_bin -mul ${tmpName}_new ${output}
+else
+    # Take the defacing masks from MNI_BigFoC space to original space
+    ${FSLDIR}/bin/flirt -in ${FSLDIR}/data/standard/MNI152_T1_1mm_BigFoV_facemask -ref ${tmpName}_orig -out ${tmpName} -applyxfm -init ${tmpName}_MNI_BigFoV_to_orig.mat
+
+    # Defacing image
+    ${FSLDIR}/bin/fslmaths ${tmpName} -binv ${tmpName}_bin
+    ${FSLDIR}/bin/fslmaths ${tmpName}_bin -mul ${tmpName}_orig ${output}
+fi
+
+# Saving intermediate outputs if the user asked to do so.
+if [ "${saveDefacingMask}" == "1" ] ; then
+    ${FSLDIR}/bin/imcp ${tmpName}_bin ${defacingMask}
+fi
+
+if [ "${saveCropped}" == "1" ] ; then
+    ${FSLDIR}/bin/imcp ${tmpName}_new ${cropped}
+fi
+
+if [ "${saveMatrix13}" == "1" ] ; then
+    cp ${tmpName}_orig_to_MNI_BigFoV_linear.mat ${Matrix13}
+fi
+
+if [ "${saveMatrix12}" == "1" ] ; then
+    cp ${tmpName}_orig_to_${imBaseName}_new.mat ${Matrix12}
+fi
+
+if [ "${saveMatrix23}" == "1" ] ; then
+    cp ${tmpName}_new_to_MNI_linear.mat ${Matrix23}
+fi
+
+if [ "${savePngs}" == "1" ] ; then
+    ${FSLDIR}/bin/fsl_gen_3D ${output} ${imagesBaseName}
+fi
+
+# Cleaning temporal files
+rm ${tmpName}*
